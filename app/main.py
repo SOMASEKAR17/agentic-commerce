@@ -1,3 +1,5 @@
+from dotenv import load_dotenv
+load_dotenv()
 import json, uuid
 from fastapi import FastAPI
 from fastapi.responses import FileResponse
@@ -8,6 +10,12 @@ from app.agents.merchant_agent import search_and_rank
 from app.agents.growth_engine import apply_discount_request
 from app.policy.policy_engine import authorize
 from pydantic import BaseModel
+from app.audit.audit_log import log_event, get_timeline, verify_chain
+from app.payments.razorpay_client import (
+    create_order as rp_create_order,
+    fetch_order_status,
+    simulate_capture_with_timeout,
+)
 
 app = FastAPI()
 init_db()
@@ -27,6 +35,21 @@ def home():
 class ChatIn(BaseModel):
     session_id: str
     message: str
+
+class FailureDemoIn(BaseModel):
+    order_id: str
+    amount: int
+
+@app.post("/demo/timeout-retry")
+def demo_timeout_retry(payload: FailureDemoIn):
+    log_event("razorpay", "PAYMENT_TIMEOUT", payload.amount,
+              "N/A", "Simulated network timeout during capture.")
+    result = simulate_capture_with_timeout(payload.order_id, payload.amount)
+    log_event("system", "STATUS_CHECK_BEFORE_RETRY", payload.amount,
+              "N/A", "Checked order status before retrying — avoided potential double charge.")
+    log_event("razorpay", result["outcome"], payload.amount,
+              "N/A", f"Retry resolved with: {result['outcome']}")
+    return result
 
 @app.post("/chat")
 def chat(payload: ChatIn):
@@ -66,6 +89,10 @@ def negotiate(payload: NegotiateIn):
         msg = f"Done — ₹{updated['final_amount']} works."
     return {"reply": msg, "offer": updated}
 
+@app.get("/audit")
+def audit():
+    return {"timeline": get_timeline(), "chain_verified": verify_chain()}
+
 @app.post("/accept")
 def accept(payload: AcceptIn):
     session = SESSIONS.get(payload.session_id)
@@ -85,10 +112,23 @@ def accept(payload: AcceptIn):
     conn.commit()
     conn.close()
 
+    log_event("buyer_agent", "OFFER_ACCEPTED", offer["final_amount"],
+              "N/A", f"Buyer accepted offer {agreement_id}.")
+
     decision = authorize(offer, payload.session_id, "merchant_demo", catalog_lookup)
+    log_event("policy_engine", "AUTHORIZATION_CHECK", offer["final_amount"],
+              decision["decision_reason"], decision["agent_explanation"])
+
+    if decision["status"] != "APPROVED":
+        return {"agreement_id": agreement_id, "policy_decision": decision, "razorpay_order": None}
+
+    rp_order = rp_create_order(offer["final_amount"], receipt=agreement_id)
+    log_event("razorpay", "ORDER_CREATED", offer["final_amount"],
+              "APPROVED", f"Razorpay order {rp_order['id']} created.")
 
     return {
         "agreement_id": agreement_id,
         "final_amount": offer["final_amount"],
         "policy_decision": decision,
+        "razorpay_order": rp_order,
     }
