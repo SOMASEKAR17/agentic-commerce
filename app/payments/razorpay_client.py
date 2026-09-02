@@ -1,5 +1,21 @@
 import os
 import razorpay
+import random
+
+def simulate_capture_with_timeout(order_id: str, amount_rupees: int, attempt: int = 1, max_attempts: int = 3):
+    """
+    Demo-only: simulates a network timeout on the first attempt, then checks
+    order status before retrying — never blindly retries a payment call.
+    """
+    if attempt == 1:
+        # simulate the timeout
+        status = fetch_order_status(order_id)
+        if status["status"] == "paid":
+            return {"outcome": "ALREADY_PROCESSED_NO_RETRY", "order": status}
+        # not processed — safe to proceed
+        if attempt < max_attempts:
+            return simulate_capture_with_timeout(order_id, amount_rupees, attempt + 1, max_attempts)
+    return {"outcome": "CAPTURED_ON_RETRY", "attempt": attempt}
 
 client = razorpay.Client(auth=(os.environ["RAZORPAY_KEY_ID"], os.environ["RAZORPAY_KEY_SECRET"]))
 
