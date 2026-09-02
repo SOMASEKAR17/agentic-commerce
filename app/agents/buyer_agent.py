@@ -16,11 +16,17 @@ def extract_intent(conversation: list[dict]) -> dict:
     messages = [{"role": "system", "content": SYSTEM}] + conversation
 
     resp = client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
-        max_tokens=300,
+        model=os.environ.get("GROQ_MODEL", "openai/gpt-oss-120b"),
+        max_tokens=500,
         temperature=0.2,
         response_format={"type": "json_object"},
         messages=messages,
     )
     text = resp.choices[0].message.content
-    return json.loads(text)
+
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        return {"product": None, "budget": None, "wireless": None,
+                "noise_cancellation": None, "complete": False,
+                "clarifying_question": "Sorry, could you rephrase that?"}

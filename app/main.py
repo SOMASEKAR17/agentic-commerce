@@ -1,6 +1,18 @@
+import os
+from pathlib import Path
+from dotenv import load_dotenv
+
+
+BASE_DIR = Path(__file__).resolve().parent.parent
+load_dotenv(dotenv_path=BASE_DIR / ".env")
+
+
+import json
 from fastapi import FastAPI
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
+
+
 from app.db import init_db
 from app.agents.buyer_agent import extract_intent
 from app.agents.merchant_agent import search_and_rank
@@ -8,7 +20,7 @@ from app.agents.merchant_agent import search_and_rank
 app = FastAPI()
 init_db()
 
-SESSIONS: dict[str, list] = {}  # in-memory, fine for a hackathon demo
+SESSIONS: dict[str, list] = {}  
 
 class ChatIn(BaseModel):
     session_id: str
