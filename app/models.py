@@ -14,3 +14,10 @@ class AcceptedOffer(BaseModel):
     final_amount: int
     currency: str = "INR"
     status: str = "ACCEPTED"
+
+class NegotiateIn(BaseModel):
+    session_id: str
+    requested_discount: int
+
+class AcceptIn(BaseModel):
+    session_id: str
