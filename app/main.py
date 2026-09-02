@@ -42,4 +42,10 @@ def chat(payload: ChatIn):
         return {"reply": intent.get("clarifying_question", "Tell me more?"), "done": False}
 
     top, offer = search_and_rank(intent)
+    if not top:
+        return {
+            "reply": f"I couldn't find any {intent.get('product','matching products')} "
+                     f"under ₹{intent.get('budget')}. Want to raise your budget?",
+            "done": True, "products": [], "offer": None
+        }
     return {"reply": "Here's what I found within your budget.", "done": True, "products": top, "offer": offer}

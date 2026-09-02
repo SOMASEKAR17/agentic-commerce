@@ -6,7 +6,8 @@ def propose_bundle(main_product: dict, intent: dict):
     remaining_budget = (intent.get("budget") or 0) - main_product["price"]
     conn = get_conn()
     case = conn.execute(
-        "SELECT * FROM products WHERE name LIKE '%Case%' AND agent_enabled=1"
+        "SELECT * FROM products WHERE name LIKE '%Case%' AND agent_enabled=1 AND id != ?",
+        (main_product["id"],)
     ).fetchone()
     conn.close()
 
