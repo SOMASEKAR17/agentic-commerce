@@ -1,3 +1,10 @@
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+from mcp.server.fastmcp import FastMCP
+from app.db import get_conn
+from app.policy.policy_engine import authorize
 from mcp.server.fastmcp import FastMCP
 from app.db import get_conn
 from app.policy.policy_engine import authorize
