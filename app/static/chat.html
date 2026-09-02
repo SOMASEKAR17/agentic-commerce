@@ -1,52 +1,214 @@
 <!DOCTYPE html>
-<html>
-<head><meta charset="utf-8"><title>Agentic Commerce Demo</title>
-<style>
-body{font-family:system-ui;max-width:600px;margin:40px auto;padding:0 16px}
-#log div{margin:8px 0;padding:8px 12px;border-radius:8px;white-space:pre-wrap}
-.user{background:#e8f0fe;text-align:right}
-.agent{background:#f1f1f1}
-input{width:75%;padding:8px}
-button{padding:8px 16px}
-</style></head>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Agentic Commerce Demo</title>
+  <style>
+    body {
+      font-family: system-ui, -apple-system, sans-serif;
+      max-width: 650px;
+      margin: 40px auto;
+      padding: 0 16px;
+      color: #1a1a1a;
+    }
+    #log {
+      height: 380px;
+      overflow-y: auto;
+      border: 1px solid #e0e0e0;
+      border-radius: 8px;
+      padding: 12px;
+      margin-bottom: 12px;
+      background: #fafafa;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .msg {
+      padding: 8px 14px;
+      border-radius: 8px;
+      white-space: pre-wrap;
+      font-size: 14px;
+      line-height: 1.4;
+      max-width: 80%;
+      word-break: break-word;
+    }
+    .user {
+      background: #e8f0fe;
+      align-self: flex-end;
+      text-align: right;
+    }
+    .agent {
+      background: #ffffff;
+      border: 1px solid #e2e8f0;
+      align-self: flex-start;
+    }
+    .input-row {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+    input {
+      flex: 1;
+      padding: 10px 12px;
+      border: 1px solid #cbd5e1;
+      border-radius: 6px;
+      font-size: 14px;
+    }
+    .actions-row {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-bottom: 16px;
+    }
+    button {
+      padding: 8px 16px;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      font-weight: 500;
+      font-size: 13px;
+      transition: background 0.15s;
+    }
+    .btn-send { background: #2563eb; color: #fff; }
+    .btn-send:hover { background: #1d4ed8; }
+    .btn-accept { background: #16a34a; color: #fff; }
+    .btn-accept:hover { background: #15803d; }
+    .btn-negotiate { background: #d97706; color: #fff; }
+    .btn-negotiate:hover { background: #b45309; }
+    .btn-audit { background: #475569; color: #fff; }
+    .btn-audit:hover { background: #334155; }
+    pre#audit-log {
+      background: #0f172a;
+      color: #38bdf8;
+      padding: 12px;
+      border-radius: 6px;
+      font-size: 12px;
+      max-height: 250px;
+      overflow-y: auto;
+    }
+  </style>
+</head>
 <body>
-<h2>Shopping Agent</h2>
-<div id="log"></div>
-<input id="msg" placeholder="I need headphones under 5000">
-<button onclick="send()">Send</button>
-<button onclick="showAudit()">Show Audit Trail</button>
-<pre id="audit-log"></pre>
-<script>
-async function showAudit(){
-  const res = await fetch('/audit');
-  const data = await res.json();
-  document.getElementById('audit-log').textContent =
-    `Chain verified: ${data.chain_verified}\n\n` + JSON.stringify(data.timeline, null, 2);
-}
-</script>
-<script>
-const sessionId = crypto.randomUUID();
-const log = document.getElementById('log');
-function addMsg(text, cls){
-  const d = document.createElement('div');
-  d.className = cls; d.textContent = text;
-  log.appendChild(d); log.scrollTop = log.scrollHeight;
-}
-async function send(){
-  const input = document.getElementById('msg');
-  const text = input.value; if(!text) return;
-  addMsg(text, 'user'); input.value = '';
-  const res = await fetch('/chat', {
-    method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({session_id: sessionId, message: text})
-  });
-  const data = await res.json();
-  addMsg(data.reply, 'agent');
-  if(data.done){
-    addMsg(JSON.stringify(data.products, null, 2), 'agent');
-    addMsg('Offer: ' + JSON.stringify(data.offer, null, 2), 'agent');
-  }
-}
-</script>
+  <h2>Shopping Agent</h2>
+  
+  <div id="log"></div>
+
+  <div class="input-row">
+    <input id="msg" placeholder="e.g. I need wireless headphones under 5000" onkeydown="if(event.key==='Enter') send()">
+    <button class="btn-send" onclick="send()">Send</button>
+  </div>
+
+  <div class="actions-row">
+    <button id="accept-btn" class="btn-accept" onclick="acceptOffer()" style="display:none">Accept Offer</button>
+    <button id="negotiate-btn" class="btn-negotiate" onclick="negotiate()" style="display:none">Ask for Discount</button>
+    <button class="btn-audit" onclick="showAudit()">Show Audit Trail</button>
+  </div>
+
+  <pre id="audit-log" style="display:none"></pre>
+
+  <script>
+    const sessionId = crypto.randomUUID();
+    const log = document.getElementById('log');
+
+    function addMsg(text, cls) {
+      const d = document.createElement('div');
+      d.className = `msg ${cls}`;
+      d.textContent = text;
+      log.appendChild(d);
+      log.scrollTop = log.scrollHeight;
+    }
+
+    async function send() {
+      const input = document.getElementById('msg');
+      const text = input.value.trim();
+      if (!text) return;
+      
+      addMsg(text, 'user');
+      input.value = '';
+
+      try {
+        const res = await fetch('/chat', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({session_id: sessionId, message: text})
+        });
+        const data = await res.json();
+        addMsg(data.reply, 'agent');
+
+        if (data.done && data.offer) {
+          addMsg('Current Offer:\n' + JSON.stringify(data.offer, null, 2), 'agent');
+          document.getElementById('accept-btn').style.display = 'inline-block';
+          document.getElementById('negotiate-btn').style.display = 'inline-block';
+        }
+      } catch (err) {
+        addMsg('Error connecting to shopping agent: ' + err.message, 'agent');
+      }
+    }
+
+    async function negotiate() {
+      const discount = prompt("How much discount are you asking for (₹)?", "200");
+      if (!discount || isNaN(discount)) return;
+
+      try {
+        const res = await fetch('/negotiate', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({
+            session_id: sessionId, 
+            requested_discount: parseInt(discount, 10)
+          })
+        });
+        const data = await res.json();
+        if (data.error) {
+          addMsg('Negotiation error: ' + data.error, 'agent');
+          return;
+        }
+        addMsg(data.reply, 'agent');
+        if (data.offer) {
+          addMsg('Revised Offer:\n' + JSON.stringify(data.offer, null, 2), 'agent');
+        }
+      } catch (err) {
+        addMsg('Failed to process discount request: ' + err.message, 'agent');
+      }
+    }
+
+    async function acceptOffer() {
+      try {
+        const res = await fetch('/accept', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({session_id: sessionId})
+        });
+        const data = await res.json();
+
+        if (data.error) {
+          addMsg('Error: ' + data.error, 'agent');
+          return;
+        }
+
+        addMsg('Acceptance & Order Result:\n' + JSON.stringify(data, null, 2), 'agent');
+        
+        // Hide action buttons after acceptance
+        document.getElementById('accept-btn').style.display = 'none';
+        document.getElementById('negotiate-btn').style.display = 'none';
+      } catch (err) {
+        addMsg('Failed to accept offer: ' + err.message, 'agent');
+      }
+    }
+
+    async function showAudit() {
+      const pre = document.getElementById('audit-log');
+      try {
+        const res = await fetch('/audit');
+        const data = await res.json();
+        pre.style.display = 'block';
+        pre.textContent = `Chain verified: ${data.chain_verified}\n\n` + JSON.stringify(data.timeline, null, 2);
+      } catch (err) {
+        pre.style.display = 'block';
+        pre.textContent = 'Error fetching audit trail: ' + err.message;
+      }
+    }
+  </script>
 </body>
 </html>
