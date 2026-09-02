@@ -1,7 +1,7 @@
 import os, json
-from anthropic import Anthropic
+from groq import Groq
 
-client = Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+client = Groq(api_key=os.environ["GROQ_API_KEY"])
 
 SYSTEM = """You are a shopping intent extraction agent. Given the conversation so far,
 output ONLY valid JSON, nothing else, matching this schema:
@@ -13,11 +13,14 @@ If not complete, set "clarifying_question" to ONE short question to ask next, an
 other unknown fields null."""
 
 def extract_intent(conversation: list[dict]) -> dict:
-    resp = client.messages.create(
-        model="claude-sonnet-5",
+    messages = [{"role": "system", "content": SYSTEM}] + conversation
+
+    resp = client.chat.completions.create(
+        model="llama-3.3-70b-versatile",
         max_tokens=300,
-        system=SYSTEM,
-        messages=conversation,
+        temperature=0.2,
+        response_format={"type": "json_object"},
+        messages=messages,
     )
-    text = resp.content[0].text
+    text = resp.choices[0].message.content
     return json.loads(text)

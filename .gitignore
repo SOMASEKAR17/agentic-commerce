@@ -5,6 +5,7 @@ __pycache__/
 
 .env
 .venv/
+data.db
 env/
 venv/
 ENV/

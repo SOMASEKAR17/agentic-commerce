@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>Agentic Commerce Demo</title>
+<style>
+body{font-family:system-ui;max-width:600px;margin:40px auto;padding:0 16px}
+#log div{margin:8px 0;padding:8px 12px;border-radius:8px;white-space:pre-wrap}
+.user{background:#e8f0fe;text-align:right}
+.agent{background:#f1f1f1}
+input{width:75%;padding:8px}
+button{padding:8px 16px}
+</style></head>
+<body>
+<h2>Shopping Agent</h2>
+<div id="log"></div>
+<input id="msg" placeholder="I need headphones under 5000">
+<button onclick="send()">Send</button>
+<script>
+const sessionId = crypto.randomUUID();
+const log = document.getElementById('log');
+function addMsg(text, cls){
+  const d = document.createElement('div');
+  d.className = cls; d.textContent = text;
+  log.appendChild(d); log.scrollTop = log.scrollHeight;
+}
+async function send(){
+  const input = document.getElementById('msg');
+  const text = input.value; if(!text) return;
+  addMsg(text, 'user'); input.value = '';
+  const res = await fetch('/chat', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({session_id: sessionId, message: text})
+  });
+  const data = await res.json();
+  addMsg(data.reply, 'agent');
+  if(data.done){
+    addMsg(JSON.stringify(data.products, null, 2), 'agent');
+    addMsg('Offer: ' + JSON.stringify(data.offer, null, 2), 'agent');
+  }
+}
+</script>
+</body>
+</html>
