@@ -149,6 +149,29 @@ Cut in this order, stop as soon as you're back on schedule:
 
 ---
 
+## 4a. Architecture update — real A2A, not in-process
+
+The Buyer Agent and Merchant Agent now run as **two separate processes** communicating over HTTP:
+
+- `merchant_service/server.py` (port 8001) — owns the catalog, growth engine, negotiation policy, and the authorize-then-execute checkout path. Exposes:
+  - `GET /.well-known/agent.json` — an Agent Card, so a Buyer Agent can discover what this merchant can do before talking to it
+  - `POST /tasks` — accepts typed tasks (`PRODUCT_DISCOVERY`, `NEGOTIATE`, `CREATE_ORDER`) and returns typed results
+- `app/main.py` (port 8000) — the Buyer Agent / chat UI. Talks to the Merchant Agent purely through `app/agents/a2a_client.py`, which makes real HTTP calls — there is no in-process shortcut back into the merchant's code.
+
+**Honest scope note for judges:** this implements Agent Card discovery and task submission/result over HTTP — the core shape of A2A. It does **not** implement the full spec's streaming responses, push notifications, multi-step task lifecycle states, or a formal auth scheme between agents. That's a deliberate, stated scope cut for hackathon time, not an oversight — say so if asked rather than implying full spec compliance.
+
+### Running it (now two terminals)
+```bash
+# Terminal 1 — Merchant Agent
+uvicorn merchant_service.server:app --port 8001 --reload
+
+# Terminal 2 — Buyer Agent / chat UI
+uvicorn app.main:app --port 8000 --reload
+```
+Open `http://localhost:8000`. If the merchant service isn't running, `/chat` will tell you explicitly instead of crashing — check for `"Merchant Agent unreachable"` in the reply.
+
+Bonus demo moment: hit `http://localhost:8001/.well-known/agent.json` directly in a browser, or click **Show Merchant Agent Card** in the UI — this is the actual discovery document, live, not a description of one.
+
 ## 5. Demo script (~3 minutes)
 1. "Headphones under ₹5,000" → buyer agent clarifies (wireless? noise cancellation?) → structured intent
 2. Merchant agent ranks catalog, growth engine proposes a bundle (headphones + case, ₹5,100 → ₹4,900)
@@ -158,3 +181,29 @@ Cut in this order, stop as soon as you're back on schedule:
 6. **Failure 1:** simulate timeout mid-capture → agent checks payment status before retrying → no double charge → explain this live
 7. **Failure 2:** buyer tries to force a ₹10,000 purchase over their configured limit → policy engine blocks it → agent explains why → audit shows `BLOCKED`, no API call made
 8. Close on the line: *"The LLM proposes. The deterministic system authorizes."*
+
+## 4b. Third review round — execution-boundary fixes (this round)
+
+The prior architecture (separate Buyer/Merchant processes, Agent Card discovery) was sound but several claimed boundaries weren't actually enforced in the running code. Fixed, item by item against the reviewer's own numbered list:
+
+| # | Issue | Fix |
+|---|---|---|
+| 1 | AcceptedOffer not the real execution boundary | Offers are now versioned rows in a real `offers` table (never mutated — negotiation always inserts a new version pointing at the old one via `supersedes`). Accepting an offer validates it through the actual `AcceptedOffer` pydantic model before it's ever persisted to `agreements`. Policy reads from that persisted row — never from a network-supplied dict. |
+| 2 | MCP bypassed at runtime | `merchant_service` is now a real MCP **client** — it spawns `app/mcp_tools/tools.py` as a subprocess over stdio and calls every catalog/negotiation/execution action through `session.call_tool(...)`. There is no other code path into the business logic. |
+| 3 | Retry demo was simulated | Replaced with `check_and_recover_payment()`, which makes a real Razorpay API call to check payment-link status before deciding whether a retry is warranted. |
+| 4 | Payment lifecycle incomplete | Real state machine: `ACCEPTED → AUTHORIZED → PAYMENT_CREATED → PAYMENT_PENDING → PAID/EXPIRED`, driven by actual payment-link creation and status polling, not just order creation. |
+| 5 | Human approval couldn't continue | `approve_pending` / `reject_pending` MCP tools + `/approve` `/reject` endpoints. Approval takes only `agreement_id` — never a new amount or items — and re-authorizes against the exact persisted snapshot. |
+| 6 | Buyer authority hardcoded | `buyer_policies` table (`approval_mode`, `max_auto_purchase`, `daily_limit`), read per-buyer at authorization time. |
+| 7 | Tool budget didn't count real tools | `record_tool_call()` now fires at every MCP tool invocation, not just on approval. |
+| 8 | Tenant scope enforced in Python | `validate_items_in_sql()` — one query per item: `WHERE id=? AND merchant_id=? AND agent_enabled=1 AND stock>0`. |
+| 9 | Stock reservation could race | Atomic `UPDATE ... WHERE stock > 0`, checked via `cursor.rowcount`, rolled back as one transaction if any item fails — before any Razorpay call. |
+| 10 | Idempotency had a race | `payment_attempts` table with `agreement_id` as primary key — the INSERT itself is the atomic race-winner check, not a separate read-then-write. |
+
+Also fixed: negative discounts rejected (schema-level `Field(ge=0)` + re-validated inside the tool itself), ranking now scores stated preferences (wireless/noise-cancellation) not just budget/rating, deterministic clarification cap enforced in code rather than trusted from the LLM, one `trace_id` generated per session and threaded through every audit event, search/negotiation events now audited (`CATALOG_SEARCHED`, `PRODUCT_RANKED`, `BUNDLE_PROPOSED`, `COUNTER_OFFER`, `DISCOUNT_DECISION`), Groq/Razorpay clients lazy-initialize instead of crashing on import, and Agent Card discovery is checked at buyer startup — the app refuses to proceed if the Merchant Agent doesn't advertise the skills it needs.
+
+**Bugs caught only by actually running this, not by writing it:**
+- The MCP subprocess doesn't inherit the parent process's environment by default — `RAZORPAY_KEY_ID` silently never reached the tool server until `env=os.environ.copy()` was added explicitly to `StdioServerParameters`.
+- The original idempotency guard treated *any* existing `payment_attempts` row as "already handled," which meant a genuine provider failure (not a duplicate) would permanently block all future retries. Fixed by tracking attempt status (`CREATING` / `CREATED` / `FAILED`) and only replaying on `CREATED`.
+- A leftover global `HUMAN_CONFIRM_THRESHOLD` constant was silently overriding the new persisted per-buyer `max_auto_purchase` policy, making Critical #6's fix look like it worked in isolation but not once wired into the real authorization check. Removed.
+
+**Deliberately not implemented, per the reviewer's own stated allowances:** persisting `SESSIONS`/conversation state to SQLite ("not essential for a single demo") and inter-agent authentication ("acceptable for hackathon scope if explicitly documented as demo-only" — so documented, here).

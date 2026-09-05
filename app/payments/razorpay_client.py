@@ -1,46 +1,50 @@
 import os
 import razorpay
-import random
 
-def simulate_capture_with_timeout(order_id: str, amount_rupees: int, attempt: int = 1, max_attempts: int = 3):
-    """
-    Demo-only: simulates a network timeout on the first attempt, then checks
-    order status before retrying — never blindly retries a payment call.
-    """
-    if attempt == 1:
-        # simulate the timeout
-        status = fetch_order_status(order_id)
-        if status["status"] == "paid":
-            return {"outcome": "ALREADY_PROCESSED_NO_RETRY", "order": status}
-        # not processed — safe to proceed
-        if attempt < max_attempts:
-            return simulate_capture_with_timeout(order_id, amount_rupees, attempt + 1, max_attempts)
-    return {"outcome": "CAPTURED_ON_RETRY", "attempt": attempt}
+_client = None
 
-client = razorpay.Client(auth=(os.environ["RAZORPAY_KEY_ID"], os.environ["RAZORPAY_KEY_SECRET"]))
-
-def create_order(amount_rupees: int, receipt: str):
-    """Amount in paise per Razorpay's API — multiply by 100."""
-    order = client.order.create({
-        "amount": amount_rupees * 100,
-        "currency": "INR",
-        "receipt": receipt,
-        "payment_capture": 0,   # explicit capture step — never auto-capture
-    })
-    return order
-
-def fetch_order_status(order_id: str):
-    return client.order.fetch(order_id)
+def get_client():
+    """Lazy-initialized so importing this module never crashes just because
+    env vars aren't loaded yet — the error now surfaces at first real use,
+    with a clear message, not as a bare KeyError during app startup."""
+    global _client
+    if _client is None:
+        key_id = os.environ.get("RAZORPAY_KEY_ID")
+        key_secret = os.environ.get("RAZORPAY_KEY_SECRET")
+        if not key_id or not key_secret:
+            raise RuntimeError(
+                "RAZORPAY_KEY_ID / RAZORPAY_KEY_SECRET are not set. "
+                "Add them to your .env before creating any payment link."
+            )
+        _client = razorpay.Client(auth=(key_id, key_secret))
+    return _client
 
 def create_payment_link(amount_rupees: int, description: str, reference_id: str):
-    link = client.payment_link.create({
+    return get_client().payment_link.create({
         "amount": amount_rupees * 100,
         "currency": "INR",
         "description": description,
         "reference_id": reference_id,
         "notify": {"sms": False, "email": False},
     })
-    return link
 
 def fetch_payment_link_status(link_id: str):
-    return client.payment_link.fetch(link_id)
+    return get_client().payment_link.fetch(link_id)
+
+def check_and_recover_payment(link_id: str) -> dict:
+    """
+    The REAL version of the old timeout/retry demo. This makes an actual
+    Razorpay API call to fetch the payment link's current state and decides
+    what to do from real provider state — never assumes success or failure.
+
+    Razorpay payment_link statuses: 'created', 'paid', 'partially_paid',
+    'expired', 'cancelled'.
+    """
+    status = fetch_payment_link_status(link_id)
+    state = status.get("status")
+
+    if state == "paid":
+        return {"outcome": "ALREADY_PAID", "recommend_retry": False, "provider_status": status}
+    if state in ("expired", "cancelled"):
+        return {"outcome": "LINK_DEAD_NEEDS_NEW_LINK", "recommend_retry": True, "provider_status": status}
+    return {"outcome": "STILL_PENDING", "recommend_retry": False, "provider_status": status}
